@@ -1,0 +1,12 @@
+name = "lean-datalog"
+defaultTargets = ["extract"]
+
+[[lean_lib]]
+name = "LeanDatalog"
+
+[[lean_lib]]
+name = "Examples"
+
+[[lean_exe]]
+name = "extract"
+root = "Main"

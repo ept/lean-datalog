@@ -1,0 +1,101 @@
+// ===========================================================================
+// Relational schema for Lean `Expr` statements extracted by `lake exe extract`.
+//
+// Node ids (`number`) are globally unique across both expressions and universe
+// levels. Structurally-equal subterms share an id (hash-consing), so "same
+// subterm" is just id equality.
+//
+// Include this file from a query file and point Soufflé at the fact dir:
+//     souffle -F <factdir> -D <outdir> queries.dl
+// ===========================================================================
+
+// --- declarations -----------------------------------------------------------
+
+// One row per encoded declaration: its name, kind, and the node id of its
+// *type* (the statement). Kinds: theorem|def|axiom|inductive|ctor|recursor|...
+.decl decl(name: symbol, kind: symbol, root: number)
+.input decl
+
+// Theorems defined in the analysed (target) modules — the "proved in this run" set.
+.decl target_theorem(name: symbol)
+.input target_theorem
+
+// `name` references constant `dep` in its statement.
+.decl depends_on(name: symbol, dep: symbol)
+.input depends_on
+
+// Node id of a declaration's *value* (definition body / proof term).
+// Present only for decls extracted with --values / --proofs.
+.decl decl_value(name: symbol, root: number)
+.input decl_value
+
+// `name` references constant `dep` in its *value* (body / proof term).
+.decl value_uses(name: symbol, dep: symbol)
+.input value_uses
+
+// --- expression nodes -------------------------------------------------------
+
+// kind tag for every expr node: app|const|bvar|fvar|mvar|sort|lam|forall|let|
+//                                lit_nat|lit_str|mdata|proj
+.decl expr_node(id: number, kind: symbol)
+.input expr_node
+
+.decl expr_app(id: number, fn: number, arg: number)
+.input expr_app
+
+.decl expr_const(id: number, name: symbol)
+.input expr_const
+
+// the i-th universe-level argument of a `const` node
+.decl expr_const_level(id: number, pos: number, level: number)
+.input expr_const_level
+
+.decl expr_bvar(id: number, idx: number)            // de Bruijn index
+.input expr_bvar
+
+.decl expr_fvar(id: number, name: symbol)
+.input expr_fvar
+
+.decl expr_mvar(id: number, name: symbol)
+.input expr_mvar
+
+.decl expr_sort(id: number, level: number)
+.input expr_sort
+
+.decl expr_lam(id: number, binder: symbol, type: number, body: number, info: symbol)
+.input expr_lam
+
+.decl expr_forall(id: number, binder: symbol, type: number, body: number, info: symbol)
+.input expr_forall
+
+.decl expr_let(id: number, name: symbol, type: number, value: number, body: number)
+.input expr_let
+
+.decl expr_lit_nat(id: number, val: symbol)         // symbol: nat literals can be huge
+.input expr_lit_nat
+
+.decl expr_lit_str(id: number, val: symbol)
+.input expr_lit_str
+
+.decl expr_mdata(id: number, inner: number)
+.input expr_mdata
+
+.decl expr_proj(id: number, typeName: symbol, idx: number, struct: number)
+.input expr_proj
+
+// --- universe levels --------------------------------------------------------
+
+.decl level_node(id: number, kind: symbol)          // zero|succ|max|imax|param|mvar
+.input level_node
+
+.decl level_succ(id: number, pred: number)
+.input level_succ
+
+.decl level_max(id: number, a: number, b: number)
+.input level_max
+
+.decl level_imax(id: number, a: number, b: number)
+.input level_imax
+
+.decl level_param(id: number, name: symbol)
+.input level_param

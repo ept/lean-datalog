@@ -1,0 +1,111 @@
+// ===========================================================================
+// Example structural queries over extracted Lean statements.
+//   souffle -F <factdir> -D <outdir> souffle/queries.dl
+// Each `.output` relation is written to <outdir>/<name>.csv.
+// ===========================================================================
+
+#include "schema.dl"
+
+// --- generic structural helpers --------------------------------------------
+
+// Direct sub-expression edge (parent -> child) across all expr node kinds.
+.decl child(parent: number, kid: number)
+child(p, f) :- expr_app(p, f, _).
+child(p, a) :- expr_app(p, _, a).
+child(p, t) :- expr_lam(p, _, t, _, _).
+child(p, b) :- expr_lam(p, _, _, b, _).
+child(p, t) :- expr_forall(p, _, t, _, _).
+child(p, b) :- expr_forall(p, _, _, b, _).
+child(p, t) :- expr_let(p, _, t, _, _).
+child(p, v) :- expr_let(p, _, _, v, _).
+child(p, b) :- expr_let(p, _, _, _, b).
+child(p, i) :- expr_mdata(p, i).
+child(p, s) :- expr_proj(p, _, _, s).
+
+// Reflexive-transitive subterm relation (ancestor contains descendant).
+.decl subterm(anc: number, desc: number)
+subterm(x, x) :- expr_node(x, _).
+subterm(x, z) :- child(x, y), subterm(y, z).
+
+// Peel leading `∀` binders to reach the conclusion of a statement.
+.decl strip_foralls(node: number, concl: number)
+strip_foralls(n, n) :- expr_node(n, k), k != "forall".
+strip_foralls(n, c) :- expr_forall(n, _, _, b, _), strip_foralls(b, c).
+
+// Head of an application spine (the function once all args are peeled).
+.decl head(node: number, h: number)
+head(n, n) :- expr_node(n, k), k != "app".
+head(n, h) :- expr_app(n, f, _), head(f, h).
+
+// --- derived, queryable views ----------------------------------------------
+
+// A theorem's conclusion node (statement with all leading binders removed).
+.decl thm_conclusion(name: symbol, concl: number)
+thm_conclusion(n, c) :- decl(n, "theorem", r), strip_foralls(r, c).
+
+// Theorem (transitively) mentions a constant anywhere in its statement.
+.decl thm_mentions(name: symbol, const: symbol)
+thm_mentions(n, c) :- decl(n, "theorem", r), subterm(r, d), expr_const(d, c).
+
+// Transitive dependency closure over *statements* only (Datalog's sweet spot).
+.decl reaches(name: symbol, dep: symbol)
+reaches(a, b) :- depends_on(a, b).
+reaches(a, c) :- depends_on(a, b), reaches(b, c).
+
+// Combined references: statement deps + value deps (needs --values/--proofs to
+// have any value_uses facts). `reaches_any` is its transitive closure.
+.decl uses(name: symbol, dep: symbol)
+uses(a, b) :- depends_on(a, b).
+uses(a, b) :- value_uses(a, b).
+
+.decl reaches_any(name: symbol, dep: symbol)
+reaches_any(a, b) :- uses(a, b).
+reaches_any(a, c) :- uses(a, b), reaches_any(b, c).
+
+// A declaration (transitively) mentions a constant anywhere in its value body.
+.decl value_mentions(name: symbol, const: symbol)
+value_mentions(n, c) :- decl_value(n, r), subterm(r, d), expr_const(d, c).
+
+// ===========================================================================
+// Concrete example queries (each materialised to a CSV)
+// ===========================================================================
+
+// Q1: equational theorems — conclusion's head constant is `Eq`.
+.decl q_equational(name: symbol)
+.output q_equational
+q_equational(n) :- thm_conclusion(n, c), head(c, h), expr_const(h, "Eq").
+
+// Q2: theorems whose statement mentions addition (`HAdd.hAdd`).
+.decl q_about_addition(name: symbol)
+.output q_about_addition
+q_about_addition(n) :- thm_mentions(n, "HAdd.hAdd").
+
+// Q3: theorems whose statement mentions a user-defined `Examples.Tree`.
+.decl q_about_tree(name: symbol)
+.output q_about_tree
+q_about_tree(n) :- thm_mentions(n, "Examples.Tree").
+
+// Q4: theorems that (transitively, through other declarations' *types*) depend
+//     on `Examples.Tree`. Note `depends_on`/`reaches` follow type-level
+//     references only — never proof terms or definition bodies.
+.decl q_depends_tree(name: symbol)
+.output q_depends_tree
+q_depends_tree(n) :- target_theorem(n), reaches(n, "Examples.Tree").
+
+// Q5: universe-polymorphic theorems (statement contains a `sort` of a `param`).
+.decl q_universe_poly(name: symbol)
+.output q_universe_poly
+q_universe_poly(n) :-
+  decl(n, "theorem", r), subterm(r, d),
+  expr_sort(d, lvl), level_param(lvl, _).
+
+// Q6: theorems containing a numeric literal, with the literal value.
+.decl q_has_nat_literal(name: symbol, val: symbol)
+.output q_has_nat_literal
+q_has_nat_literal(n, v) :-
+  decl(n, "theorem", r), subterm(r, d), expr_lit_nat(d, v).
+
+// Q7: definitions whose *body* uses addition (needs --values). E.g. `double`.
+.decl q_def_body_uses_add(name: symbol)
+.output q_def_body_uses_add
+q_def_body_uses_add(n) :- decl(n, "def", _), value_mentions(n, "HAdd.hAdd").

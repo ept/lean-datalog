@@ -1,0 +1,9 @@
+# Lean / Lake build output
+/.lake/
+
+# Extractor fact output and Soufflé query results (generated)
+/out*/
+/results*/
+/res*/
+/scaleout/
+/scaleres/
