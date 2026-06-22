@@ -1,0 +1,34 @@
+// ===========================================================================
+// Bounded value-level queries (require facts produced with --values).
+//   souffle -F mlvals -D mlvres souffle/queries_values.dl
+// All queries are direct joins on value_uses (the value-reference edge), so
+// they stay cheap even over the whole-Mathlib corpus.
+// ===========================================================================
+
+.decl decl(name: symbol, kind: symbol, root: number)
+.input decl
+.decl decl_value(name: symbol, root: number)
+.input decl_value
+.decl value_uses(name: symbol, dep: symbol)
+.input value_uses
+
+.printsize decl_value
+.printsize value_uses
+
+// Definitions whose *body* invokes the axiom of choice (nonconstructive).
+.decl q_body_uses_choice(name: symbol)
+.output q_body_uses_choice
+q_body_uses_choice(n) :- decl(n, "def", _), value_uses(n, "Classical.choice").
+.printsize q_body_uses_choice
+
+// Definitions implemented by well-founded recursion.
+.decl q_body_uses_wf(name: symbol)
+.output q_body_uses_wf
+q_body_uses_wf(n) :- decl(n, "def", _), value_uses(n, "WellFounded.fix").
+.printsize q_body_uses_wf
+
+// Definitions whose body sums over a Finset.
+.decl q_body_uses_finset_sum(name: symbol)
+.output q_body_uses_finset_sum
+q_body_uses_finset_sum(n) :- value_uses(n, "Finset.sum").
+.printsize q_body_uses_finset_sum
