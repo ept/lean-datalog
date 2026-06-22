@@ -1,0 +1,66 @@
+// ===========================================================================
+// Demand-bounded queries for whole-Mathlib scale.
+//
+// Avoids the 40M-row `expr_node` table and any unbounded transitive closure
+// (`subterm`/`reaches`). Everything here is anchored at the ~249k theorem roots
+// and walks only downward along forall-chains / application spines, so the
+// derived relations stay within a few million tuples.
+//
+//   souffle -F mlall -D mlres souffle/queries_scale.dl
+// ===========================================================================
+
+// --- only the relations these queries actually need (keeps memory bounded) ---
+.decl decl(name: symbol, kind: symbol, root: number)
+.input decl
+.decl target_theorem(name: symbol)
+.input target_theorem
+.decl depends_on(name: symbol, dep: symbol)
+.input depends_on
+.decl expr_app(id: number, fn: number, arg: number)
+.input expr_app
+.decl expr_const(id: number, name: symbol)
+.input expr_const
+.decl expr_forall(id: number, binder: symbol, type: number, body: number, info: symbol)
+.input expr_forall
+
+// --- counts ---
+.printsize target_theorem
+.printsize decl
+.printsize depends_on
+
+// --- conclusion of each theorem: peel leading foralls, anchored at theorem roots ---
+.decl concl_step(root: number, node: number)
+concl_step(r, r)  :- decl(_, "theorem", r).
+concl_step(r, b)  :- concl_step(r, f), expr_forall(f, _, _, b, _).
+
+.decl thm_conclusion(name: symbol, concl: number)
+thm_conclusion(n, c) :- decl(n, "theorem", r), concl_step(r, c), !expr_forall(c, _, _, _, _).
+
+// --- head of an application spine, anchored at conclusions ---
+.decl spine(concl: number, node: number)
+spine(c, c) :- thm_conclusion(_, c).
+spine(c, f) :- spine(c, x), expr_app(x, f, _).
+
+// Q1: equational theorems (conclusion head is `Eq`).
+.decl q_equational(name: symbol)
+.output q_equational
+q_equational(n) :- thm_conclusion(n, c), spine(c, h), expr_const(h, "Eq").
+.printsize q_equational
+
+// Q2: theorems whose statement references addition (via the direct depends_on edge).
+.decl q_mentions_add(name: symbol)
+.output q_mentions_add
+q_mentions_add(n) :- target_theorem(n), depends_on(n, "HAdd.hAdd").
+.printsize q_mentions_add
+
+// Q3: theorems whose conclusion head is `Iff` (logical equivalences).
+.decl q_iff(name: symbol)
+.output q_iff
+q_iff(n) :- thm_conclusion(n, c), spine(c, h), expr_const(h, "Iff").
+.printsize q_iff
+
+// Q4: theorems that reference `Finset` anywhere in their statement.
+.decl q_about_finset(name: symbol)
+.output q_about_finset
+q_about_finset(n) :- target_theorem(n), depends_on(n, "Finset").
+.printsize q_about_finset

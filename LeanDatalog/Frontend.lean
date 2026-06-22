@@ -39,6 +39,17 @@ def definedInTargets (env : Environment) (idxs : Std.HashSet Nat) (n : Name) : B
   | some idx => idxs.contains idx.toNat
   | none     => false
 
+/-- The name of the module that defines `n`, if any (none ⇒ defined in this file). -/
+def moduleNameOf? (env : Environment) (n : Name) : Option Name :=
+  match env.getModuleIdxFor? n with
+  | some idx => env.header.moduleNames[idx.toNat]?
+  | none     => none
+
+/-- Does module name `m` fall under one of the dotted prefixes (`P` or `P.…`)? -/
+def matchesPrefix (prefixes : List String) (m : Name) : Bool :=
+  let s := m.toString
+  prefixes.any fun p => s == p || (p ++ ".").isPrefixOf s
+
 /-- True for `theorem` declarations. -/
 def isTheorem : ConstantInfo → Bool
   | .thmInfo _ => true
@@ -78,6 +89,24 @@ structure Config where
   values : Bool := false
   /-- Encode theorem *proof terms* too (large; expands the closure). -/
   proofs : Bool := false
+  /-- Seed theorems from every module whose name matches one of these prefixes
+      (e.g. `["Mathlib"]`), instead of only the modules named on the command line.
+      Empty ⇒ use the named-modules behaviour. -/
+  modulePrefixes : List String := []
+  /-- Reset the hash-cons tables before each declaration: bounds memory to one
+      statement at a time (no cross-declaration subterm sharing). Needed for
+      whole-Mathlib runs on a memory-constrained machine. -/
+  noShare : Bool := false
+
+/-- Is `n` a theorem we should seed, given the config (named-modules or prefix mode)? -/
+def isSeedTheorem (env : Environment) (cfg : Config) (idxs : Std.HashSet Nat)
+    (ci : ConstantInfo) (n : Name) : Bool :=
+  isUserFacingTheorem cfg.includeAll ci n &&
+    (if cfg.modulePrefixes.isEmpty then
+        definedInTargets env idxs n
+      else match moduleNameOf? env n with
+        | some m => matchesPrefix cfg.modulePrefixes m
+        | none   => false)
 
 /-- The defining value of a constant, if any: definition/opaque body or proof term. -/
 def constValue? : ConstantInfo → Option Expr
@@ -131,32 +160,42 @@ def extract (env : Environment) (targets : Array Name) (dir : System.FilePath)
   for rel in allRelations do
     IO.FS.writeFile (dir / s!"{rel}.facts") ""
   let idxs := targetModuleIdxs env targets
-  let run : EncM Unit := do
-    -- Seed: every theorem defined in a target module.
+  let run : EncM Nat := do
+    -- Seed: every theorem matching the config (named modules, or module prefixes).
     let mut worklist : Array Name := #[]
     let mut seen : Std.HashSet Name := {}
     for (name, ci) in env.constants.toList do
-      if isUserFacingTheorem cfg.includeAll ci name && definedInTargets env idxs name then
+      if isSeedTheorem env cfg idxs ci name then
         emit "target_theorem" #[nm name]
         worklist := worklist.push name
         seen := seen.insert name
-    -- Transitively encode statements of everything reachable.
+    IO.eprintln s!"seeded {worklist.size} theorems; encoding statements…"
+    -- Transitively encode statements (and, when enabled, values) of everything reachable.
+    let mut processed := 0
     while !worklist.isEmpty do
       let name := worklist.back!
       worklist := worklist.pop
       match env.find? name with
       | none => pure ()
       | some ci =>
+        -- Bound memory: forget cross-declaration subterm sharing if requested.
+        if cfg.noShare then
+          modify fun s => { s with exprIds := {}, levelIds := {} }
         let deps ← encodeConst cfg ci
         for d in deps do
           if !seen.contains d then
             seen := seen.insert d
             worklist := worklist.push d
-  let (_, st) ← run.run { dir }
+        processed := processed + 1
+        if processed % 20000 == 0 then
+          IO.eprintln s!"  … {processed} declarations encoded ({(← get).nextId} nodes)"
+    return processed
+  let (processed, st) ← run.run { dir }
   -- Flush and close all handles.
   for (_, h) in st.handles.toList do
     h.flush
-  IO.println s!"wrote facts for {st.exprIds.size} distinct exprs / {st.levelIds.size} levels \
-    ({st.nextId} nodes) into {dir}"
+  let sharing := if cfg.noShare then "no cross-decl sharing"
+                 else s!"{st.exprIds.size} distinct exprs"
+  IO.println s!"encoded {processed} declarations, {st.nextId} total nodes ({sharing}) into {dir}"
 
 end LeanDatalog

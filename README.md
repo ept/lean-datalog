@@ -43,9 +43,11 @@ lake build
 
 # extract every theorem in Examples.Sample (+ statement deps) into ./out
 lake exe extract out Examples.Sample
-#   --all      also include auto-generated lemmas (eq_1, injEq, sizeOf_spec, …)
-#   --values   also encode definition/opaque *bodies*    (decl_value + value_uses)
-#   --proofs   also encode theorem *proof terms*  (implies --values; see caveat)
+#   --all       also include auto-generated lemmas (eq_1, injEq, sizeOf_spec, …)
+#   --values    also encode definition/opaque *bodies*    (decl_value + value_uses)
+#   --proofs    also encode theorem *proof terms*  (implies --values; see caveat)
+#   --prefix P  seed theorems from every imported module named P or P.* (repeatable)
+#   --no-share  reset the hash-cons table per declaration (bounds memory; for huge runs)
 
 # run the example queries; results land in ./results/*.csv
 mkdir -p results
@@ -124,11 +126,50 @@ The encoding is built for it. Validated on `Init.Data.List.Lemmas`: 681
 theorems, 929 declarations, 12k distinct expr nodes extracted in ~0.2s, all six
 queries in ~0.1s, 748 KB of facts — hash-consing does the heavy lifting.
 
-For a full Mathlib run: build Mathlib, then pass the module list to `extract`
-(facts stream to disk, so memory stays bounded by the hash-cons tables). The
-node-id space is `number` (64-bit, as built here). For very large corpora,
-shard by target module into separate fact dirs, or load facts into Soufflé's
-SQLite backend instead of TSV.
+### Whole-Mathlib run (measured)
+
+Add Mathlib as a dependency, fetch its olean cache, build the `Mathlib` root,
+then extract every `Mathlib.*` theorem:
+
+```bash
+# lakefile.toml: require mathlib (git, rev = your toolchain's tag, e.g. v4.31.0)
+lake update           # fetches deps + downloads Mathlib's prebuilt cache
+lake build Mathlib    # builds just the root aggregator olean (~seconds)
+lake exe extract --prefix Mathlib --no-share mlall Mathlib
+```
+
+Measured on a 7.8 GB / 10-core box, statements only:
+
+| | |
+|---|---|
+| theorems seeded (all `Mathlib.*`) | 249,003 |
+| declarations encoded (+ dependency types) | 300,300 |
+| total nodes | 40,033,535 |
+| fact output | 2.1 GB |
+| extract wall-clock | ~3 min |
+
+`--no-share` is the key: it resets the hash-cons table per declaration so heap
+stays flat and the loaded environment (mostly mmap-backed oleans) dominates RSS.
+Without it the global dedup table would not fit in 8 GB. The trade-off is no
+*cross-declaration* subterm sharing (subterms shared *within* a statement still
+collapse), which inflates the fact files but never changes query results.
+
+The node-id space is `number` (64-bit, as built here). For even larger corpora,
+shard by module prefix into separate fact dirs, or use Soufflé's SQLite backend.
+
+### Querying at scale
+
+A full `subterm`/`reaches` transitive closure over 40M nodes will not fit in
+8 GB. `souffle/queries_scale.dl` shows the bounded alternative: declare only the
+relations a query needs (skip the 38M-row `expr_node`), and anchor every
+recursion at the ~249k theorem roots, walking only downward (peel foralls, walk
+the application spine). All four example queries over the full corpus run in
+~14 s:
+
+```bash
+souffle -F mlall -D mlres souffle/queries_scale.dl
+# q_equational 125,179 · q_iff 32,445 · q_mentions_add 20,243 · q_about_finset 11,897
+```
 
 ## Extending
 
